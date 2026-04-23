@@ -1,0 +1,39 @@
+## [ Образи компіляції та тимчасові файли ]
+bin/
+obj/
+out/
+publish/
+
+## [ Visual Studio / VS Code ]
+.vscode
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+
+## [ Секрети та налаштування середовища ]
+# Ігноруємо .env файли, бо там зазвичай токени та паролі
+.env
+.env.development
+.env.local
+
+# Ігноруємо локальні налаштування розробки
+appsettings.Development.json
+
+## [ Docker ]
+.dockerignore
+
+## [ Логи та БД ]
+*.log
+*.sqlite
+*.db
+
+## [ Системні файли ]
+.DS_Store
+Thumbs.db
+.vscode/launch.json
+Api/Data/Context/AppDbContextFactory.cs

@@ -1,0 +1,21 @@
+services:
+  api:
+    build:
+      context: ./Api
+      dockerfile: Dockerfile
+      args:
+        BUILD_CONFIGURATION: Debug
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    env_file:
+      - Api/.env
+
+  telegram-bot:
+    build:
+      context: ./TelegramBot
+      dockerfile: Dockerfile
+      args:
+        BUILD_CONFIGURATION: Debug
+    env_file:
+      - TelegramBot/.env
