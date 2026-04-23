@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 
+
 namespace AnimeTracker.Data.Context;
 
 public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
@@ -13,4 +14,4 @@ public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
 
         return new AppDbContext(optionsBuilder.Options);
     }
-}
+} 
