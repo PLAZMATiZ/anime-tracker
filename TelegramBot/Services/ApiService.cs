@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using TelegramBot.DataTransferObjects;
 using TelegramBot.Exceptions;
 
 namespace TelegramBot.Services
@@ -76,12 +77,12 @@ namespace TelegramBot.Services
             response.EnsureSuccessStatusCode();
         }
 
-        public async Task<List<int>> GetWatchedAnimes(long telegramId)
+        public async Task<List<AnimeShortInfo>> GetWatchedAnimes(long telegramId)
         {
             var response = await _httpClient.GetAsync($"api/me/anime/{telegramId}");
-            if (!response.IsSuccessStatusCode) return new List<int>();
+            if (!response.IsSuccessStatusCode) return new List<AnimeShortInfo>();
 
-            return await response.Content.ReadFromJsonAsync<List<int>>() ?? new List<int>();
+            return await response.Content.ReadFromJsonAsync<List<AnimeShortInfo>>() ?? new List<AnimeShortInfo>();
         }
 
         public async Task<List<AnimeShortInfo>> FindAnime(string name)
@@ -99,21 +100,5 @@ namespace TelegramBot.Services
 
             return await response.Content.ReadFromJsonAsync<AnimeShortInfo>() ?? new AnimeShortInfo();
         }
-    }
-
-    public class AnimeShortInfo
-    {
-        [JsonPropertyName("id")]
-        public int Id { get; set; }
-
-        [JsonPropertyName("title")]
-        public string Name { get; set; } = string.Empty;
-    }
-
-    public class AddWatchedDto
-    {
-        public long UserTelegramId { get; set; }
-        public string AnimeName { get; set; } = string.Empty;
-        public int MyAnimeListId { get; set; }
     }
 }

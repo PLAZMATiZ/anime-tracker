@@ -41,7 +41,6 @@ namespace AnimeTracker.Services
         {
             try
             {
-                // ЗМІНЕНО: Використовуємо JikanSingleResponse
                 var response = await _httpClient.GetFromJsonAsync<JikanSingleResponse>($"anime/{id}");
 
                 if (response?.Data == null)
@@ -60,13 +59,11 @@ namespace AnimeTracker.Services
             }
         }
 
-        // Для списку аніме (Find)
         private class JikanResponse
         {
             [JsonPropertyName("data")] public List<JikanAnimeData> Data { get; set; }
         }
 
-        // ДОДАНО: Для одного аніме (Get)
         private class JikanSingleResponse
         {
             [JsonPropertyName("data")] public JikanAnimeData Data { get; set; }

@@ -1,6 +1,7 @@
 using AnimeTracker.Data.Context;
 using AnimeTracker.Data.Entities;
 using AnimeTracker.Exceptions;
+using Api.Data.DataTransferObjects;
 using Microsoft.EntityFrameworkCore;
 
 namespace AnimeTracker.Services;
@@ -16,11 +17,16 @@ public class AnimeService
         _logger = logger;
     }
 
-    public async Task<List<int>> GetWatchedAnimeIds(long userId)
+    public async Task<List<WatchedAnimeResponse>> GetWatchedAnimes(long userId)
     {
         return await _context.Set<WatchHistory>()
             .Where(x => x.UserId == userId)
-            .Select(x => x.MyAnimeListId)
+            .Select(x =>
+                new WatchedAnimeResponse
+                {
+                    Id = x.MyAnimeListId,
+                    Title = x.AnimeName
+                })
             .ToListAsync();
     }
 
@@ -34,7 +40,7 @@ public class AnimeService
                 MyAnimeListId = animeId,
                 AnimeName = name
             };
-            if(await _context.Set<WatchHistory>().AnyAsync(x => x.UserId == userId && x.MyAnimeListId == animeId))
+            if (await _context.Set<WatchHistory>().AnyAsync(x => x.UserId == userId && x.MyAnimeListId == animeId))
                 throw new ApiException("Anime already exists", 409);
 
             await _context.Set<WatchHistory>().AddAsync(watchHistory);

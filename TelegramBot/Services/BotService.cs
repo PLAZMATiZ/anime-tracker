@@ -112,6 +112,12 @@ namespace TelegramBot.Services
                 _userStates.Remove(chatId);
                 await ShowMainMenu(chatId, "Main Menu. Select an action.", cancellationToken);
             }
+            else if (data.StartsWith("cmd_my_list:"))
+            {
+                _userStates.Remove(chatId);
+                int page = int.Parse(data.Split(':')[1]);
+                await ShowMyList(chatId, page, cancellationToken);
+            }
             else if (data == "cmd_add")
             {
                 _userStates[chatId] = "awaiting_search";
@@ -137,11 +143,78 @@ namespace TelegramBot.Services
         {
             var keyboard = new InlineKeyboardMarkup(new[]
             {
+                new[] { InlineKeyboardButton.WithCallbackData("My Library", "cmd_my_list:0") }, // 0 - це стартова сторінка
                 new[] { InlineKeyboardButton.WithCallbackData("Add Anime", "cmd_add") },
                 new[] { InlineKeyboardButton.WithCallbackData("Remove Anime", "cmd_remove_list") }
             });
 
             await UpdateBotInterface(chatId, text, cancellationToken, keyboard);
+        }
+
+        private async Task ShowMyList(long chatId, int page, CancellationToken cancellationToken)
+        {
+            await _botClient.SendChatAction(chatId, ChatAction.Typing, cancellationToken: cancellationToken);
+
+            try
+            {
+                var watchedAnimes = await _apiService.GetWatchedAnimes(chatId);
+
+                if (watchedAnimes == null || !watchedAnimes.Any())
+                {
+                    await UpdateBotInterface(chatId, "Your library is currently empty.", cancellationToken, GetBackKeyboard());
+                    return;
+                }
+
+                int pageSize = 10;
+                int totalItems = watchedAnimes.Count;
+                int totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
+
+                if (page < 0) page = 0;
+                if (page >= totalPages) page = totalPages - 1;
+
+                var pageItems = watchedAnimes.Skip(page * pageSize).Take(pageSize).ToList();
+
+                var messageLines = new List<string>
+                {
+                    $"Library Database (Page {page + 1} of {totalPages}):",
+                    "----------------------------------------"
+                };
+
+                foreach (var anime in pageItems)
+                {
+                    messageLines.Add($"- {anime.Name}");
+                }
+
+                string text = string.Join("\n", messageLines);
+
+                var navigationButtons = new List<InlineKeyboardButton>();
+
+                if (page > 0)
+                {
+                    navigationButtons.Add(InlineKeyboardButton.WithCallbackData("< Previous", $"cmd_my_list:{page - 1}"));
+                }
+
+                if (page < totalPages - 1)
+                {
+                    navigationButtons.Add(InlineKeyboardButton.WithCallbackData("Next >", $"cmd_my_list:{page + 1}"));
+                }
+
+                var keyboardRows = new List<InlineKeyboardButton[]>();
+
+                if (navigationButtons.Any())
+                {
+                    keyboardRows.Add(navigationButtons.ToArray());
+                }
+
+                keyboardRows.Add(new[] { InlineKeyboardButton.WithCallbackData("Back to Menu", "menu_main") });
+
+                await UpdateBotInterface(chatId, text, cancellationToken, new InlineKeyboardMarkup(keyboardRows));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving anime list.");
+                await UpdateBotInterface(chatId, "System error. Failed to retrieve the library data.", cancellationToken, GetBackKeyboard());
+            }
         }
 
         private async Task PerformSearch(long chatId, string query, CancellationToken cancellationToken)
@@ -177,9 +250,9 @@ namespace TelegramBot.Services
 
             try
             {
-                var watchedIds = await _apiService.GetWatchedAnimes(chatId);
+                var watchedAnimes = await _apiService.GetWatchedAnimes(chatId);
 
-                if (watchedIds == null || !watchedIds.Any())
+                if (watchedAnimes == null || !watchedAnimes.Any())
                 {
                     await UpdateBotInterface(chatId, "Your library is currently empty.", cancellationToken, GetBackKeyboard());
                     return;
@@ -187,9 +260,8 @@ namespace TelegramBot.Services
 
                 var buttons = new List<InlineKeyboardButton[]>();
 
-                foreach (var id in watchedIds.TakeLast(5))
+                foreach (var anime in watchedAnimes.TakeLast(10))
                 {
-                    var anime = await _apiService.GetAnime(id);
                     buttons.Add(new[] { InlineKeyboardButton.WithCallbackData($"Delete: {anime.Name}", $"del:{anime.Id}") });
                 }
 
@@ -197,8 +269,9 @@ namespace TelegramBot.Services
 
                 await UpdateBotInterface(chatId, "Select an entry to remove from your library (showing latest):", cancellationToken, new InlineKeyboardMarkup(buttons));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                _logger.LogError(ex, "Failed to retrieve library data for removal.");
                 await UpdateBotInterface(chatId, "Failed to retrieve library data.", cancellationToken, GetBackKeyboard());
             }
         }

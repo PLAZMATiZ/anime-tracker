@@ -1,5 +1,6 @@
 using AnimeTracker.Exceptions;
 using AnimeTracker.Services;
+using Api.Data.DataTransferObjects;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AnimeTracker.Controllers
@@ -23,7 +24,7 @@ namespace AnimeTracker.Controllers
         }
 
         [HttpPut]
-        public async Task<IActionResult> AddWatched([FromBody] AddWatchedDto dto)
+        public async Task<IActionResult> AddWatched([FromBody] AddWatchedRequest dto)
         {
             try
             {
@@ -43,7 +44,7 @@ namespace AnimeTracker.Controllers
             }
         }
         [HttpDelete]
-        public async Task<IActionResult> RemoveWatched([FromBody] RemoveWatchedDto dto)
+        public async Task<IActionResult> RemoveWatched([FromBody] RemoveWatchedRequest dto)
         {
             try
             {
@@ -68,9 +69,8 @@ namespace AnimeTracker.Controllers
         {
             try
             {
-                // Тобі потрібно додати цей метод у свій UserService або AnimeService
-                var animeIds = await _animeService.GetWatchedAnimeIds(telegramId);
-                return Ok(animeIds);
+                var animes = await _animeService.GetWatchedAnimes(telegramId);
+                return Ok(animes);
             }
             catch (Exception e)
             {
@@ -79,17 +79,4 @@ namespace AnimeTracker.Controllers
             }
         }
     }
-    public class AddWatchedDto
-    {
-        public long UserTelegramId { get; set; }
-        public string AnimeName { get; set; }
-        public int MyAnimeListId { get; set; }
-    }
-    public class RemoveWatchedDto
-    {
-        public long UserTelegramId { get; set; }
-        public string AnimeName { get; set; }
-        public int MyAnimeListId { get; set; }
-    }
-
 }
