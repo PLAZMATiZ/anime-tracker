@@ -69,7 +69,15 @@ namespace AnimeTracker.Controllers
         {
             try
             {
-                var animes = await _animeService.GetWatchedAnimes(telegramId);
+                var user = await _userService.FindUser(telegramId);
+
+                if (user == null)
+                {
+                    return NotFound("User not found");
+                }
+
+                var animes = await _animeService.GetWatchedAnimes(user.Id);
+
                 return Ok(animes);
             }
             catch (Exception e)
