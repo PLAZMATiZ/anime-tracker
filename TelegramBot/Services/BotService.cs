@@ -110,7 +110,7 @@ namespace TelegramBot.Services
                     var animeName = messageText.Replace("/find", "").Trim();
                     if (string.IsNullOrEmpty(animeName))
                     {
-                        await SendMessage(chatId, "Напишіть назву аніме, щоб знайти його.", botClient, cancellationToken);
+                        await SendMessage(chatId, "Напишіть назву аніме на англійській, щоб знайти його.", botClient, cancellationToken);
                         SetLastUserCommand(userId, "/find");
                         return;
                     }
@@ -127,13 +127,12 @@ namespace TelegramBot.Services
                 long userId = callbackQuery.From.Id;
                 string data = callbackQuery.Data ?? "";
 
-                // Відповідаємо телеграму, що ми отримали запит (щоб годинник на кнопці зник)
                 await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
 
                 if (data == "add_anime")
                 {
                     SetLastUserCommand(userId, "/find");
-                    await botClient.SendMessage(chatId, "Напишіть назву аніме, щоб знайти його. ", cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, "Напишіть назву аніме на англійській, щоб знайти його. ", cancellationToken: cancellationToken);
                 }
                 else if (data == "delete:")
                 {
