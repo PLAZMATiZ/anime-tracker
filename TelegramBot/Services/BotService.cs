@@ -1,3 +1,8 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Telegram.Bot;
@@ -14,9 +19,8 @@ namespace TelegramBot.Services
         private readonly ILogger<MyBotService> _logger;
         private readonly ITelegramBotClient _botClient;
         private readonly ApiService _apiService;
-        private readonly Dictionary<long, string?> _lastUserCommands = new();
-        private readonly Dictionary<long, Message> _lastUserMessages = new();
-        private readonly Dictionary<long, Message> _lastBotMessages = new();
+        private readonly Dictionary<long, string> _userStates = new();
+        private readonly Dictionary<long, int> _lastBotMessageIds = new();
 
         public MyBotService(ILogger<MyBotService> logger, ITelegramBotClient botClient, ApiService apiService)
         {
@@ -27,7 +31,7 @@ namespace TelegramBot.Services
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("Бот запускається...");
+            _logger.LogInformation("System initialization...");
 
             var receiverOptions = new ReceiverOptions
             {
@@ -42,271 +46,249 @@ namespace TelegramBot.Services
             );
 
             var me = await _botClient.GetMe(stoppingToken);
-            _logger.LogInformation("Бот @{Username} запущений!", me.Username);
+            _logger.LogInformation("Bot @{Username} is online.", me.Username);
 
             await Task.Delay(Timeout.Infinite, stoppingToken);
         }
 
-        private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
-            CancellationToken cancellationToken)
+        private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
-            var chatId = update.Type switch
+            try
             {
-                UpdateType.Message => update.Message.Chat.Id,
-                UpdateType.CallbackQuery => update.CallbackQuery.Message.Chat.Id,
-                UpdateType.EditedMessage => update.EditedMessage.Chat.Id,
-                UpdateType.ChannelPost => update.ChannelPost.Chat.Id,
-                _ => 0 // Якщо тип не підтримує чат (наприклад, опитування)
-            };
-
-            // 1. ОБРОБКА ТЕКСТОВИХ ПОВІДОМЛЕНЬ
-            if (update.Message is { Text: { } messageText } message)
-            {
-                if (_lastUserCommands.TryGetValue(message.Chat.Id, out var lastCommand))
+                if (update.Type == UpdateType.Message && update.Message?.Text != null)
                 {
-                    
-                    switch (lastCommand)
-                    {
-                        case "/find":
-                            try
-                            {
-                                await FindAnime(chatId, messageText, botClient, cancellationToken);
-                                ClearLastUserCommand(message.Chat.Id);
-                            }
-                            catch (Exception e)
-                            {
-                                await SendMessage(chatId, "Нічого не знайдено, спробуйте ще", botClient, cancellationToken);
-                                _logger.LogError(e, "Помилка при пошуку аніме");
-                                throw;
-                            }
-                            break;
-                    }
+                    await HandleMessageAsync(botClient, update.Message, cancellationToken);
+                }
+                else if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery != null)
+                {
+                    await HandleCallbackQueryAsync(botClient, update.CallbackQuery, cancellationToken);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling update.");
+            }
+        }
+
+        private async Task HandleMessageAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        {
+            long chatId = message.Chat.Id;
+            string text = message.Text!;
+
+            await SafeDeleteMessage(chatId, message.MessageId, botClient, cancellationToken);
+
+            if (text == "/start")
+            {
+                await _botClient.SendChatAction(chatId, ChatAction.Typing, cancellationToken: cancellationToken);
+
+                var userExists = await _apiService.IsUserExists(chatId);
+                if (!userExists)
+                {
+                    await _apiService.CreateUser(chatId);
                 }
 
-                if(!_lastUserMessages.TryAdd(message.Chat.Id, message))
+                _userStates.Remove(chatId);
+                await ShowMainMenu(chatId, "System initialized. Welcome to your personal library.", cancellationToken);
+                return;
+            }
+
+            if (_userStates.TryGetValue(chatId, out var state) && state == "awaiting_search")
+            {
+                await _botClient.SendChatAction(chatId, ChatAction.Typing, cancellationToken: cancellationToken);
+                _userStates.Remove(chatId);
+                await PerformSearch(chatId, text, cancellationToken);
+            }
+        }
+
+        private async Task HandleCallbackQueryAsync(ITelegramBotClient botClient, CallbackQuery callbackQuery, CancellationToken cancellationToken)
+        {
+            long chatId = callbackQuery.Message!.Chat.Id;
+            string data = callbackQuery.Data ?? string.Empty;
+
+            await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+
+            if (data == "menu_main")
+            {
+                _userStates.Remove(chatId);
+                await ShowMainMenu(chatId, "Main Menu. Select an action.", cancellationToken);
+            }
+            else if (data == "cmd_add")
+            {
+                _userStates[chatId] = "awaiting_search";
+                await UpdateBotInterface(chatId, "Awaiting input. Please type the title of the anime in English.", cancellationToken, GetBackKeyboard());
+            }
+            else if (data == "cmd_remove_list")
+            {
+                await ShowRemoveList(chatId, cancellationToken);
+            }
+            else if (data.StartsWith("add:"))
+            {
+                int animeId = int.Parse(data.Split(':')[1]);
+                await AddToWatched(chatId, animeId, cancellationToken);
+            }
+            else if (data.StartsWith("del:"))
+            {
+                int animeId = int.Parse(data.Split(':')[1]);
+                await RemoveFromWatched(chatId, animeId, cancellationToken);
+            }
+        }
+
+        private async Task ShowMainMenu(long chatId, string text, CancellationToken cancellationToken)
+        {
+            var keyboard = new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData("Add Anime", "cmd_add") },
+                new[] { InlineKeyboardButton.WithCallbackData("Remove Anime", "cmd_remove_list") }
+            });
+
+            await UpdateBotInterface(chatId, text, cancellationToken, keyboard);
+        }
+
+        private async Task PerformSearch(long chatId, string query, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var animes = await _apiService.FindAnime(query);
+
+                if (animes == null || !animes.Any())
                 {
-                    _lastUserMessages[message.Chat.Id] = message;
-                }
-
-                
-
-                _logger.LogInformation("Отримано текст: {Text}", messageText);
-
-                long userId = message.From?.Id ?? -1;
-
-                if (messageText == "/start")
-                {
-                    var userExits = await _apiService.IsUserExists(userId);
-                    if (!userExits) await _apiService.CreateUser(userId);
-
-                    await SendMessage(chatId, "Привіт! Якщо ви хочете додати аніме, напишіть /find.", botClient, cancellationToken);                    
-                    
-                    await MainMenu(chatId, botClient, cancellationToken);
+                    await UpdateBotInterface(chatId, $"No results found for \"{query}\".", cancellationToken, GetBackKeyboard());
                     return;
                 }
 
-                if (messageText.StartsWith("/find"))
+                var buttons = new List<InlineKeyboardButton[]>();
+                foreach (var anime in animes.Take(5))
                 {
-                    var animeName = messageText.Replace("/find", "").Trim();
-                    if (string.IsNullOrEmpty(animeName))
-                    {
-                        await SendMessage(chatId, "Напишіть назву аніме на англійській, щоб знайти його.", botClient, cancellationToken);
-                        SetLastUserCommand(userId, "/find");
-                        return;
-                    }
-
-                    await FindAnime(chatId, animeName, botClient, cancellationToken);
+                    buttons.Add(new[] { InlineKeyboardButton.WithCallbackData(anime.Name, $"add:{anime.Id}") });
                 }
-                return;
+                buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("Back", "menu_main") });
+
+                await UpdateBotInterface(chatId, "Search completed. Select an entry to add to your library:", cancellationToken, new InlineKeyboardMarkup(buttons));
             }
-
-            if (update.CallbackQuery is { } callbackQuery)
+            catch (Exception)
             {
-                _logger.LogInformation("Натиснуто кнопку: {Data}", callbackQuery.Data);
-
-                long userId = callbackQuery.From.Id;
-                string data = callbackQuery.Data ?? "";
-
-                await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
-
-                if (data == "add_anime")
-                {
-                    SetLastUserCommand(userId, "/find");
-                    await botClient.SendMessage(chatId, "Напишіть назву аніме на англійській, щоб знайти його. ", cancellationToken: cancellationToken);
-                }
-                else if (data == "delete:")
-                {
-                    int animeId = int.Parse(data.Split(':')[1]);
-
-                    await DeleteLastBotMessage(chatId, botClient, cancellationToken);
-                    await DeleteLastUserMessage(chatId, botClient, cancellationToken);
-
-                    await _botClient.SendChatAction(chatId, ChatAction.Typing, cancellationToken: cancellationToken);
-
-                    await RemoveFromWatched(userId, animeId, chatId, botClient, cancellationToken);
-
-                    await MainMenu(chatId, botClient, cancellationToken);
-                }
-                else if (data == "menu_main")
-                {
-                    await MainMenu(chatId, botClient, cancellationToken);
-                }
-                else if (data.StartsWith("add:"))
-                {
-                    int animeId = int.Parse(data.Split(':')[1]);
-                    
-                    await DeleteLastBotMessage(chatId, botClient, cancellationToken);
-                    await DeleteLastUserMessage(chatId, botClient, cancellationToken);
-
-                    await _botClient.SendChatAction(chatId, ChatAction.Typing, cancellationToken: cancellationToken);   
-
-                    await AddToWatched(userId, animeId, botClient, cancellationToken);
-
-                    await MainMenu(chatId, botClient, cancellationToken);
-                }
-                else if (data == "remove:")
-                {
-                    int animeId = int.Parse(data.Split(':')[1]);
-                    await RemoveFromWatched(userId, animeId, chatId, botClient, cancellationToken);
-                }
+                await UpdateBotInterface(chatId, "Error connecting to the database. Try again later.", cancellationToken, GetBackKeyboard());
             }
         }
 
-        private void SetLastUserCommand(long chatId, string command)
+        private async Task ShowRemoveList(long chatId, CancellationToken cancellationToken)
         {
-            if (!_lastUserCommands.TryAdd(chatId, command))
+            await _botClient.SendChatAction(chatId, ChatAction.Typing, cancellationToken: cancellationToken);
+
+            try
             {
-                _lastUserCommands[chatId] = command;
+                var watchedIds = await _apiService.GetWatchedAnimes(chatId);
+
+                if (watchedIds == null || !watchedIds.Any())
+                {
+                    await UpdateBotInterface(chatId, "Your library is currently empty.", cancellationToken, GetBackKeyboard());
+                    return;
+                }
+
+                var buttons = new List<InlineKeyboardButton[]>();
+
+                foreach (var id in watchedIds.TakeLast(5))
+                {
+                    var anime = await _apiService.GetAnime(id);
+                    buttons.Add(new[] { InlineKeyboardButton.WithCallbackData($"Delete: {anime.Name}", $"del:{anime.Id}") });
+                }
+
+                buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("Back", "menu_main") });
+
+                await UpdateBotInterface(chatId, "Select an entry to remove from your library (showing latest):", cancellationToken, new InlineKeyboardMarkup(buttons));
             }
-            else
+            catch (Exception)
             {
-                _lastUserCommands[chatId] = command;
+                await UpdateBotInterface(chatId, "Failed to retrieve library data.", cancellationToken, GetBackKeyboard());
             }
-        }
-        private void ClearLastUserCommand(long chatId)
-        {
-            _lastUserCommands.Remove(chatId);
         }
 
-        private async Task SendMessage(long chatId, string text, ITelegramBotClient botClient,
-            CancellationToken cancellationToken, ReplyMarkup? replyMarkup = null)
+        private async Task AddToWatched(long chatId, int animeId, CancellationToken cancellationToken)
         {
-            var message = await botClient.SendMessage(
+            try
+            {
+                var anime = await _apiService.GetAnime(animeId);
+                await _apiService.AddAnimeToWatched(chatId, animeId, anime.Name);
+                await ShowMainMenu(chatId, $"Success. \"{anime.Name}\" was added to your library.", cancellationToken);
+            }
+            catch (BotException ex) when (ex.StatusCode == 409)
+            {
+                await ShowMainMenu(chatId, "Conflict. This entry already exists in your library.", cancellationToken);
+            }
+            catch (Exception)
+            {
+                await ShowMainMenu(chatId, "Error. Failed to add the entry.", cancellationToken);
+            }
+        }
+
+        private async Task RemoveFromWatched(long chatId, int animeId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await _apiService.RemoveAnimeFromWatched(chatId, animeId);
+                await ShowMainMenu(chatId, "Success. Entry removed from your library.", cancellationToken);
+            }
+            catch (Exception)
+            {
+                await ShowMainMenu(chatId, "Error. Failed to remove the entry.", cancellationToken);
+            }
+        }
+
+        private async Task UpdateBotInterface(long chatId, string text, CancellationToken cancellationToken, InlineKeyboardMarkup keyboard = null)
+        {
+            if (_lastBotMessageIds.TryGetValue(chatId, out int messageId))
+            {
+                try
+                {
+                    await _botClient.EditMessageText(
+                        chatId: chatId,
+                        messageId: messageId,
+                        text: text,
+                        replyMarkup: keyboard,
+                        parseMode: ParseMode.Html,
+                        cancellationToken: cancellationToken
+                    );
+                    return;
+                }
+                catch
+                {
+                    _lastBotMessageIds.Remove(chatId);
+                }
+            }
+
+            var newMessage = await _botClient.SendMessage(
                 chatId: chatId,
                 text: text,
-                replyMarkup: replyMarkup,
+                replyMarkup: keyboard,
+                parseMode: ParseMode.Html,
                 cancellationToken: cancellationToken
             );
-            if(!_lastBotMessages.TryAdd(message.Chat.Id, message))
-            {
-                _lastBotMessages[message.Chat.Id] = message;
-            }
+
+            _lastBotMessageIds[chatId] = newMessage.MessageId;
         }
 
-        private async Task DeleteLastUserMessage(long chatId, ITelegramBotClient botClient, CancellationToken cancellationToken)
+        private InlineKeyboardMarkup GetBackKeyboard()
         {
-            if (_lastUserMessages.TryGetValue(chatId, out var lastMessage))
+            return new InlineKeyboardMarkup(new[]
             {
-                await botClient.DeleteMessage(chatId: chatId, messageId: lastMessage.MessageId,
-                    cancellationToken: cancellationToken);
-                _lastUserMessages.Remove(chatId);
-            }
-        }
-        private async Task DeleteLastBotMessage(long chatId, ITelegramBotClient botClient, CancellationToken cancellationToken)
-        {
-            if (_lastBotMessages.TryGetValue(chatId, out var lastMessage))
-            {
-                await botClient.DeleteMessage(chatId: chatId, messageId: lastMessage.MessageId,
-                    cancellationToken: cancellationToken);
-                _lastBotMessages.Remove(chatId);
-            }
-        }
-
-        private async Task MainMenu(long chatId, ITelegramBotClient botClient, CancellationToken cancellationToken)
-        {
-            var buttons = new List<InlineKeyboardButton[]>()
-            {
-                new InlineKeyboardButton[]
-                {
-                    InlineKeyboardButton.WithCallbackData("Додати аніме", "add_anime"),
-                    InlineKeyboardButton.WithCallbackData("Видалити аніме", "remove_anime")
-                }
-            };
-
-            await SendMessage(chatId, "Головне меню", botClient, cancellationToken, new InlineKeyboardMarkup(buttons));   
-        }
-
-        private async Task FindAnime(long chatId, string name, ITelegramBotClient botClient,
-            CancellationToken cancellationToken)
-        {
-            var animes = await _apiService.FindAnime(name);
-
-            if (animes == null || !animes.Any())
-            {
-                throw new Exception("Anime not found");
-            }
-
-            var buttons = new List<InlineKeyboardButton[]>();
-
-            foreach (var anime in animes.Take(5))
-            {
-                buttons.Add(new[]
-                {
-                    InlineKeyboardButton.WithCallbackData(anime.Name, $"add:{anime.Id}")
-                });
-            }
-
-            buttons.Add(new[]
-            {
-                InlineKeyboardButton.WithCallbackData("Вийти в меню", "menu_main")
+                new[] { InlineKeyboardButton.WithCallbackData("Cancel", "menu_main") }
             });
-
-            var keyboard = new InlineKeyboardMarkup(buttons);
-
-            await SendMessage(chatId, "Ось що я знайшов. Обери аніме, щоб додати у переглянуті:", botClient, cancellationToken, keyboard);
         }
 
-        private async Task AddToWatched(long userId, int animeId, ITelegramBotClient botClient,
-            CancellationToken cancellationToken)
-        {
-            var anime = await _apiService.GetAnime(animeId);
-            try
-            {
-                await _apiService.AddAnimeToWatched(userId, animeId, anime.Name);
-
-                await SendMessage(userId, "Anime added to watched list", botClient, cancellationToken);
-            }
-            catch (BotException e)
-            {
-                await SendMessage(userId, e.Message, botClient, cancellationToken);
-            }
-        }
-
-        private async Task RemoveFromWatched(long userId, int animeId, long chatId, ITelegramBotClient botClient,
-            CancellationToken cancellationToken)
+        private async Task SafeDeleteMessage(long chatId, int messageId, ITelegramBotClient botClient, CancellationToken cancellationToken)
         {
             try
-            {   
-                await _apiService.RemoveAnimeFromWatched(userId, animeId);
-            }
-            catch (BotException e)
             {
-                await SendMessage(userId, e.Message, botClient, cancellationToken);
-                return;
+                await botClient.DeleteMessage(chatId, messageId, cancellationToken);
             }
-
-            await SendMessage(chatId, "Anime removed from watched list", botClient, cancellationToken);
-            await Task.Delay(300, cancellationToken);
-            await DeleteLastBotMessage(chatId, botClient, cancellationToken);
-            await DeleteLastUserMessage(chatId, botClient, cancellationToken);
-
-            await MainMenu(chatId, botClient, cancellationToken);
+            catch
+            {
+            }
         }
 
-        private Task HandlePollingErrorAsync(ITelegramBotClient botClient, Exception exception,
-            CancellationToken cancellationToken)
+        private Task HandlePollingErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
         {
-            _logger.LogError(exception, "Помилка Telegram API");
+            _logger.LogError(exception, "Telegram API Error.");
             return Task.CompletedTask;
         }
     }

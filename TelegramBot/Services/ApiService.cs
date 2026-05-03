@@ -29,155 +29,91 @@ namespace TelegramBot.Services
 
         public async Task CreateUser(long telegramId)
         {
-            try
-            {
-                var response = await _httpClient.PostAsync($"api/user/{telegramId}", null);
-                response.EnsureSuccessStatusCode();
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e, "Error creating user {TelegramId}", telegramId);
-                throw;
-            }
+            var response = await _httpClient.PostAsync($"api/user/{telegramId}", null);
+            response.EnsureSuccessStatusCode();
         }
 
-        public async Task DeleteUser(long telegramId)
-        {
-            try
-            {
-                var response = await _httpClient.DeleteAsync($"api/user/{telegramId}");
-                response.EnsureSuccessStatusCode();
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e, "Error deleting user {TelegramId}", telegramId);
-                throw;
-            }
-        }
-
-        // ДОПИСАНО: Передача даних через Body (PUT запит)
         public async Task AddAnimeToWatched(long telegramId, int animeId, string animeName)
         {
-            try
+            var dto = new AddWatchedDto
             {
-                var dto = new AddWatchedDto
-                {
-                    UserTelegramId = telegramId,
-                    AnimeName = animeName,
-                    MyAnimeListId = animeId
-                };
-                var Json = JsonSerializer.Serialize(dto);
-                _logger.LogInformation("Json: {Json}", Json);
+                UserTelegramId = telegramId,
+                AnimeName = animeName,
+                MyAnimeListId = animeId
+            };
 
-                var response = await _httpClient.PutAsJsonAsync("api/me/anime", dto);
-                if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
-                {
-                    _logger.LogInformation("Anime {AnimeId} already exists for user {TelegramId}", animeId, telegramId);
-                    throw new BotException("Anime already exists", 409);
-                }
-                response.EnsureSuccessStatusCode();
-            }
-            catch (Exception e)
+            var response = await _httpClient.PutAsJsonAsync("api/me/anime", dto);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
             {
-                _logger.LogError(e, "Error adding anime {AnimeId} for user {TelegramId}", animeId, telegramId);
-                throw;
+                throw new BotException("Anime already exists", 409);
             }
+
+            response.EnsureSuccessStatusCode();
         }
 
         public async Task RemoveAnimeFromWatched(long telegramId, int animeId)
         {
-            try
+            var dto = new
             {
-                var dto = new
-                {
-                    UserId = telegramId,
-                    AnimeName =
-                        "",
-                    MyAnimeListId = animeId
-                };
+                UserTelegramId = telegramId,
+                AnimeName = "Unknown",
+                MyAnimeListId = animeId
+            };
 
-                var request = new HttpRequestMessage(HttpMethod.Delete, "api/me/anime")
-                {
-                    Content = JsonContent.Create(dto)
-                };
-
-                var response = await _httpClient.SendAsync(request);
-                if(response.StatusCode == System.Net.HttpStatusCode.NotFound)
-                {
-                    _logger.LogInformation("Anime {AnimeId} not found for user {TelegramId}", animeId, telegramId);
-                    throw new BotException("Anime not found", 404);
-                }
-                response.EnsureSuccessStatusCode();
-            }
-            catch (Exception e)
+            var request = new HttpRequestMessage(HttpMethod.Delete, "api/me/anime")
             {
-                _logger.LogError(e, "Error removing anime {AnimeId} from user {TelegramId}", animeId, telegramId);
-                throw;
+                Content = JsonContent.Create(dto)
+            };
+
+            var response = await _httpClient.SendAsync(request);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                throw new BotException("Anime not found", 404);
             }
+
+            response.EnsureSuccessStatusCode();
         }
 
         public async Task<List<int>> GetWatchedAnimes(long telegramId)
         {
-            try
-            {
-                var response = await _httpClient.GetAsync($"api/me/anime/{telegramId}");
-                response.EnsureSuccessStatusCode();
+            var response = await _httpClient.GetAsync($"api/me/anime/{telegramId}");
+            if (!response.IsSuccessStatusCode) return new List<int>();
 
-                return await response.Content.ReadFromJsonAsync<List<int>>() ?? new List<int>();
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e, "Error getting watched animes for user {TelegramId}", telegramId);
-                throw;
-            }
+            return await response.Content.ReadFromJsonAsync<List<int>>() ?? new List<int>();
         }
 
         public async Task<List<AnimeShortInfo>> FindAnime(string name)
         {
-            try
-            {
-                var response = await _httpClient.GetAsync($"api/anime/find/{name}");
-                response.EnsureSuccessStatusCode();
+            var response = await _httpClient.GetAsync($"api/anime/find/{name}");
+            if (!response.IsSuccessStatusCode) return new List<AnimeShortInfo>();
 
-                return await response.Content.ReadFromJsonAsync<List<AnimeShortInfo>>() ?? new List<AnimeShortInfo>();
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e, "Error finding anime {AnimeName}", name);
-                throw;
-            }
+            return await response.Content.ReadFromJsonAsync<List<AnimeShortInfo>>() ?? new List<AnimeShortInfo>();
         }
 
         public async Task<AnimeShortInfo> GetAnime(int id)
         {
-            try
-            {
-                var response = await _httpClient.GetAsync($"api/anime/{id}");
-    
-                response.EnsureSuccessStatusCode();
-                return await response.Content.ReadFromJsonAsync<AnimeShortInfo>() ?? new AnimeShortInfo();
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e, "Error getting anime {AnimeId}", id);
-                throw;
-            }
+            var response = await _httpClient.GetAsync($"api/anime/{id}");
+            response.EnsureSuccessStatusCode();
+
+            return await response.Content.ReadFromJsonAsync<AnimeShortInfo>() ?? new AnimeShortInfo();
         }
     }
 
-public class AnimeShortInfo
-{
-    [JsonPropertyName("id")]
-    public int Id { get; set; }
+    public class AnimeShortInfo
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; set; }
 
-    [JsonPropertyName("title")]
-    public string Name { get; set; } = null!;
-}
+        [JsonPropertyName("title")]
+        public string Name { get; set; } = string.Empty;
+    }
 
-public class AddWatchedDto
-{
-    public long UserTelegramId { get; set; }
-    public string AnimeName { get; set; }
-    public int MyAnimeListId { get; set; }
-}
+    public class AddWatchedDto
+    {
+        public long UserTelegramId { get; set; }
+        public string AnimeName { get; set; } = string.Empty;
+        public int MyAnimeListId { get; set; }
+    }
 }
