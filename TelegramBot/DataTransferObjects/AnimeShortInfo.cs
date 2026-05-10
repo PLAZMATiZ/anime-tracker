@@ -12,6 +12,12 @@ namespace TelegramBot.DataTransferObjects
         public int Id { get; set; }
 
         [JsonPropertyName("title")]
-        public string Name { get; set; } = string.Empty;
+        public string Name { get; set; } = null!;
+
+        [JsonPropertyName("imageUrl")]
+        public string? ImageUrl { get; set; }
+
+        [JsonPropertyName("synopsis")]
+        public string? Synopsis { get; set; }
     }
 }

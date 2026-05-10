@@ -21,6 +21,7 @@ namespace TelegramBot.Services
         private readonly ApiService _apiService;
         private readonly Dictionary<long, string> _userStates = new();
         private readonly Dictionary<long, int> _lastBotMessageIds = new();
+        private readonly Dictionary<long, string> _lastSearchQueries = new();
 
         public MyBotService(ILogger<MyBotService> logger, ITelegramBotClient botClient, ApiService apiService)
         {
@@ -96,6 +97,9 @@ namespace TelegramBot.Services
             {
                 await _botClient.SendChatAction(chatId, ChatAction.Typing, cancellationToken: cancellationToken);
                 _userStates.Remove(chatId);
+
+                _lastSearchQueries[chatId] = text;
+
                 await PerformSearch(chatId, text, cancellationToken);
             }
         }
@@ -103,6 +107,7 @@ namespace TelegramBot.Services
         private async Task HandleCallbackQueryAsync(ITelegramBotClient botClient, CallbackQuery callbackQuery, CancellationToken cancellationToken)
         {
             long chatId = callbackQuery.Message!.Chat.Id;
+            int messageId = callbackQuery.Message.MessageId;
             string data = callbackQuery.Data ?? string.Empty;
 
             await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
@@ -110,6 +115,7 @@ namespace TelegramBot.Services
             if (data == "menu_main")
             {
                 _userStates.Remove(chatId);
+                await SafeDeleteMessage(chatId, messageId, botClient, cancellationToken);
                 await ShowMainMenu(chatId, "Main Menu. Select an action.", cancellationToken);
             }
             else if (data.StartsWith("cmd_my_list:"))
@@ -127,15 +133,36 @@ namespace TelegramBot.Services
             {
                 await ShowRemoveList(chatId, cancellationToken);
             }
+            else if (data.StartsWith("view:"))
+            {
+                int animeId = int.Parse(data.Split(':')[1]);
+                await SafeDeleteMessage(chatId, messageId, botClient, cancellationToken);
+                await ShowAnimeDetails(chatId, animeId, cancellationToken);
+            }
             else if (data.StartsWith("add:"))
             {
                 int animeId = int.Parse(data.Split(':')[1]);
+                await SafeDeleteMessage(chatId, messageId, botClient, cancellationToken);
                 await AddToWatched(chatId, animeId, cancellationToken);
             }
             else if (data.StartsWith("del:"))
             {
                 int animeId = int.Parse(data.Split(':')[1]);
+                await SafeDeleteMessage(chatId, messageId, botClient, cancellationToken);
                 await RemoveFromWatched(chatId, animeId, cancellationToken);
+            }
+            else if (data == "back_to_search")
+            {
+                await SafeDeleteMessage(chatId, messageId, botClient, cancellationToken);
+
+                if (_lastSearchQueries.TryGetValue(chatId, out var lastQuery))
+                {
+                    await PerformSearch(chatId, lastQuery, cancellationToken);
+                }
+                else
+                {
+                    await ShowMainMenu(chatId, "Session expired. Returned to main menu.", cancellationToken);
+                }
             }
         }
 
@@ -232,15 +259,68 @@ namespace TelegramBot.Services
                 var buttons = new List<InlineKeyboardButton[]>();
                 foreach (var anime in animes.Take(5))
                 {
-                    buttons.Add(new[] { InlineKeyboardButton.WithCallbackData(anime.Name, $"add:{anime.Id}") });
+                    buttons.Add(new[] { InlineKeyboardButton.WithCallbackData(anime.Name, $"view:{anime.Id}") });
                 }
-                buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("Back", "menu_main") });
+                buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("Cancel Search", "menu_main") });
 
-                await UpdateBotInterface(chatId, "Search completed. Select an entry to add to your library:", cancellationToken, new InlineKeyboardMarkup(buttons));
+                await UpdateBotInterface(chatId, "Search completed. Select an entry to view details:", cancellationToken, new InlineKeyboardMarkup(buttons));
             }
             catch (Exception)
             {
                 await UpdateBotInterface(chatId, "Error connecting to the database. Try again later.", cancellationToken, GetBackKeyboard());
+            }
+        }
+
+        private async Task ShowAnimeDetails(long chatId, int animeId, CancellationToken cancellationToken)
+        {
+            await _botClient.SendChatAction(chatId, ChatAction.UploadPhoto, cancellationToken: cancellationToken);
+
+            try
+            {
+                var anime = await _apiService.GetAnime(animeId);
+
+                string synopsis = anime.Synopsis ?? "No description available.";
+                if (synopsis.Length > 800) synopsis = synopsis.Substring(0, 800) + "...";
+
+                string caption = $"🎬 <b>{anime.Name}</b>\n\n📝 <b>Synopsis:</b>\n{synopsis}";
+
+                var keyboard = new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("✅ Add to Library", $"add:{anime.Id}") },
+                    new[] { InlineKeyboardButton.WithCallbackData("🔙 Back to Search", "back_to_search") },
+                    new[] { InlineKeyboardButton.WithCallbackData("🏠 Main Menu", "menu_main") }
+                });
+
+                Message newMessage;
+
+                if (!string.IsNullOrEmpty(anime.ImageUrl))
+                {
+                    newMessage = await _botClient.SendPhoto(
+                        chatId: chatId,
+                        photo: InputFile.FromUri(anime.ImageUrl),
+                        caption: caption,
+                        parseMode: ParseMode.Html,
+                        replyMarkup: keyboard,
+                        cancellationToken: cancellationToken
+                    );
+                }
+                else
+                {
+                    newMessage = await _botClient.SendMessage(
+                        chatId: chatId,
+                        text: caption,
+                        parseMode: ParseMode.Html,
+                        replyMarkup: keyboard,
+                        cancellationToken: cancellationToken
+                    );
+                }
+
+                _lastBotMessageIds[chatId] = newMessage.MessageId;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching anime details.");
+                await ShowMainMenu(chatId, "Error loading anime details.", cancellationToken);
             }
         }
 

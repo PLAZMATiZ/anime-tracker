@@ -19,15 +19,15 @@ namespace AnimeTracker.Services
         {
             try
             {
-                var response =
-                    await _httpClient.GetFromJsonAsync<JikanResponse>($"anime?q={Uri.EscapeDataString(name)}&limit=5");
-
+                var response = await _httpClient.GetFromJsonAsync<JikanResponse>($"anime?q={Uri.EscapeDataString(name)}&limit=5");
                 if (response?.Data == null) return new List<AnimeShortInfo>();
 
                 return response.Data.Select(a => new AnimeShortInfo
                 {
                     Id = a.MalId,
-                    Name = a.Title
+                    Name = a.Title,
+                    ImageUrl = a.Images?.Jpg?.LargeImageUrl, // Дістаємо картинку
+                    Synopsis = a.Synopsis
                 }).ToList();
             }
             catch (Exception ex)
@@ -42,14 +42,14 @@ namespace AnimeTracker.Services
             try
             {
                 var response = await _httpClient.GetFromJsonAsync<JikanSingleResponse>($"anime/{id}");
-
-                if (response?.Data == null)
-                    throw new ApiException("Аніме не знайдено", 404);
+                if (response?.Data == null) throw new ApiException("Аніме не знайдено", 404);
 
                 return new AnimeShortInfo
                 {
                     Id = response.Data.MalId,
-                    Name = response.Data.Title
+                    Name = response.Data.Title,
+                    ImageUrl = response.Data.Images?.Jpg?.LargeImageUrl, // Дістаємо картинку
+                    Synopsis = response.Data.Synopsis
                 };
             }
             catch (Exception ex)
@@ -59,28 +59,32 @@ namespace AnimeTracker.Services
             }
         }
 
-        private class JikanResponse
-        {
-            [JsonPropertyName("data")] public List<JikanAnimeData> Data { get; set; }
-        }
-
-        private class JikanSingleResponse
-        {
-            [JsonPropertyName("data")] public JikanAnimeData Data { get; set; }
-        }
-
+        private class JikanResponse { [JsonPropertyName("data")] public List<JikanAnimeData> Data { get; set; } }
+        private class JikanSingleResponse { [JsonPropertyName("data")] public JikanAnimeData Data { get; set; } }
+        
         private class JikanAnimeData
         {
             [JsonPropertyName("mal_id")] public int MalId { get; set; }
-
             [JsonPropertyName("title")] public string Title { get; set; }
+            [JsonPropertyName("synopsis")] public string Synopsis { get; set; }
+            [JsonPropertyName("images")] public JikanImages Images { get; set; }
         }
-    }
+
+        private class JikanImages { [JsonPropertyName("jpg")] public JikanJpg Jpg { get; set; } }
+        private class JikanJpg { [JsonPropertyName("large_image_url")] public string LargeImageUrl { get; set; } }}
 
     public class AnimeShortInfo
     {
-        [JsonPropertyName("id")] public int Id { get; set; }
+        [JsonPropertyName("id")]
+        public int Id { get; set; }
 
-        [JsonPropertyName("title")] public string Name { get; set; } = null!;
+        [JsonPropertyName("title")]
+        public string Name { get; set; } = null!;
+
+        [JsonPropertyName("imageUrl")]
+        public string? ImageUrl { get; set; }
+
+        [JsonPropertyName("synopsis")]
+        public string? Synopsis { get; set; }
     }
 }
